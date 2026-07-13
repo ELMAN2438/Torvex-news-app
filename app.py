@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 st.set_page_config(
     page_title="Robot de noticias Forex",
@@ -9,7 +9,7 @@ st.set_page_config(
     layout="wide",
 )
 
-TE_URL = "https://api.tradingeconomics.com/calendar/{d1}/{d2}"
+TE_URL = "https://api.tradingeconomics.com/calendar"
 IMPORTANCE_ES = {3: "Alto", 2: "Medio", 1: "Bajo", 0: "Feriado"}
 IMPACT_COLOR = {"Alto": "#e05252", "Medio": "#d99a3d", "Bajo": "#8a8f98", "Feriado": "#5b8def"}
 
@@ -27,9 +27,7 @@ def obtener_calendario():
     # en secrets con tu "client:secret" real si te registras para mejores límites.
     credenciales = st.secrets.get("TE_API_KEY", "guest:guest")
 
-    hoy = datetime.now(timezone.utc).date()
-    url = TE_URL.format(d1=hoy.isoformat(), d2=(hoy + timedelta(days=6)).isoformat())
-    respuesta = requests.get(url, params={"c": credenciales, "f": "json"}, timeout=10)
+    respuesta = requests.get(TE_URL, params={"c": credenciales, "f": "json"}, timeout=10)
     respuesta.raise_for_status()
 
     filas = []
