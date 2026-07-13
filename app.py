@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 st.set_page_config(
     page_title="Robot de noticias Forex",
@@ -9,14 +9,24 @@ st.set_page_config(
     layout="wide",
 )
 
-CALENDAR_URL = "https://nfs.faireconomy.info/ff_calendar_thisweek.json"
+FMP_URL = "https://financialmodelingprep.com/api/v3/economic_calendar"
 IMPACT_ES = {"High": "Alto", "Medium": "Medio", "Low": "Bajo", "Holiday": "Feriado"}
 IMPACT_COLOR = {"Alto": "#e05252", "Medio": "#d99a3d", "Bajo": "#8a8f98", "Feriado": "#5b8def"}
 
 
-@st.cache_data(ttl="1m")
+@st.cache_data(ttl="10m")  # el plan gratuito de FMP tiene cupo diario limitado de llamadas
 def obtener_calendario():
-    respuesta = requests.get(CALENDAR_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+    api_key = st.secrets.get("FMP_API_KEY")
+    if not api_key:
+        return None
+
+    hoy = datetime.now(timezone.utc).date()
+    params = {
+        "from": hoy.isoformat(),
+        "to": (hoy + timedelta(days=6)).isoformat(),
+        "apikey": api_key,
+    }
+    respuesta = requests.get(FMP_URL, params=params, timeout=10)
     respuesta.raise_for_status()
 
     filas = []
@@ -25,17 +35,21 @@ def obtener_calendario():
         if not fecha_raw:
             continue
         try:
-            fecha_dt = datetime.fromisoformat(fecha_raw).astimezone()
+            fecha_dt = (
+                datetime.strptime(fecha_raw, "%Y-%m-%d %H:%M:%S")
+                .replace(tzinfo=timezone.utc)
+                .astimezone()
+            )
         except ValueError:
             continue
 
         filas.append({
-            "Moneda": item.get("country", "—"),
-            "Evento": item.get("title", "Evento económico"),
+            "Moneda": item.get("currency") or item.get("country", "—"),
+            "Evento": item.get("event", "Evento económico"),
             "Fecha y hora": fecha_dt,
-            "Previo": item.get("previous") or "—",
-            "Previsión": item.get("forecast") or "—",
-            "Actual": item.get("actual") or "—",
+            "Previo": item.get("previous") if item.get("previous") is not None else "—",
+            "Previsión": item.get("estimate") if item.get("estimate") is not None else "—",
+            "Actual": item.get("actual") if item.get("actual") is not None else "—",
             "Impacto": IMPACT_ES.get(item.get("impact"), "Bajo"),
         })
 
@@ -82,7 +96,16 @@ def panel_noticias():
         with st.spinner("Actualizando calendario económico..."):
             datos = obtener_calendario()
     except requests.RequestException as e:
-        st.error(f"No se pudo conectar con el calendario económico: {e}", icon=":material/error:")
+        st.error(f"No se pudo conectar con Financial Modeling Prep: {e}", icon=":material/error:")
+        return
+
+    if datos is None:
+        st.error(
+            "Falta configurar la API key de Financial Modeling Prep. Agrega `FMP_API_KEY` en "
+            "`.streamlit/secrets.toml` (local) o en Settings → Secrets de tu app en Streamlit "
+            "Cloud.",
+            icon=":material/key_off:",
+        )
         return
 
     if datos.empty:
@@ -117,7 +140,7 @@ def panel_noticias():
             minutos = int((siguiente["Fecha y hora"] - ahora).total_seconds() // 60)
             st.metric("Próximo evento de alto impacto", siguiente["Evento"], delta=f"en {minutos} min")
 
-    st.caption(f"Última actualización: {ahora.strftime('%H:%M:%S')} · se refresca cada minuto")
+    st.caption(f"Última actualización: {ahora.strftime('%H:%M:%S')} · datos del calendario se refrescan cada ~10 min")
 
     if df_vista.empty:
         st.info("No hay eventos para este rango con los filtros seleccionados.", icon=":material/event_busy:")
@@ -137,7 +160,7 @@ def panel_noticias():
             hide_index=True,
         )
 
-    st.caption("Fuente: Forex Factory (feed público, sin garantía de disponibilidad).")
+    st.caption("Fuente: Financial Modeling Prep (calendario económico).")
 
 
 st.title(":material/monitoring: Robot analizador de noticias económicas")
