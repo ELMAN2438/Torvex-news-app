@@ -9,48 +9,51 @@ st.set_page_config(
     layout="wide",
 )
 
-FMP_URL = "https://financialmodelingprep.com/api/v3/economic_calendar"
-IMPACT_ES = {"High": "Alto", "Medium": "Medio", "Low": "Bajo", "Holiday": "Feriado"}
+TE_URL = "https://api.tradingeconomics.com/calendar/{d1}/{d2}"
+IMPORTANCE_ES = {3: "Alto", 2: "Medio", 1: "Bajo", 0: "Feriado"}
 IMPACT_COLOR = {"Alto": "#e05252", "Medio": "#d99a3d", "Bajo": "#8a8f98", "Feriado": "#5b8def"}
 
+CURRENCY_BY_COUNTRY = {
+    "United States": "USD", "Euro Area": "EUR", "European Union": "EUR",
+    "United Kingdom": "GBP", "Japan": "JPY", "Australia": "AUD", "Canada": "CAD",
+    "Switzerland": "CHF", "New Zealand": "NZD", "China": "CNY",
+    "Germany": "EUR", "France": "EUR", "Italy": "EUR", "Spain": "EUR",
+}
 
-@st.cache_data(ttl="10m")  # el plan gratuito de FMP tiene cupo diario limitado de llamadas
+
+@st.cache_data(ttl="10m")
 def obtener_calendario():
-    api_key = st.secrets.get("FMP_API_KEY")
-    if not api_key:
-        return None
+    # "guest:guest" es el acceso público gratuito de Trading Economics; configura TE_API_KEY
+    # en secrets con tu "client:secret" real si te registras para mejores límites.
+    credenciales = st.secrets.get("TE_API_KEY", "guest:guest")
 
     hoy = datetime.now(timezone.utc).date()
-    params = {
-        "from": hoy.isoformat(),
-        "to": (hoy + timedelta(days=6)).isoformat(),
-        "apikey": api_key,
-    }
-    respuesta = requests.get(FMP_URL, params=params, timeout=10)
+    url = TE_URL.format(d1=hoy.isoformat(), d2=(hoy + timedelta(days=6)).isoformat())
+    respuesta = requests.get(url, params={"c": credenciales, "f": "json"}, timeout=10)
     respuesta.raise_for_status()
 
     filas = []
     for item in respuesta.json():
-        fecha_raw = item.get("date")
+        fecha_raw = item.get("Date")
         if not fecha_raw:
             continue
         try:
-            fecha_dt = (
-                datetime.strptime(fecha_raw, "%Y-%m-%d %H:%M:%S")
-                .replace(tzinfo=timezone.utc)
-                .astimezone()
-            )
+            fecha_dt = datetime.fromisoformat(fecha_raw.replace("Z", "+00:00"))
+            if fecha_dt.tzinfo is None:
+                fecha_dt = fecha_dt.replace(tzinfo=timezone.utc)
+            fecha_dt = fecha_dt.astimezone()
         except ValueError:
             continue
 
+        pais = item.get("Country", "—")
         filas.append({
-            "Moneda": item.get("currency") or item.get("country", "—"),
-            "Evento": item.get("event", "Evento económico"),
+            "Moneda": CURRENCY_BY_COUNTRY.get(pais, pais),
+            "Evento": item.get("Event", "Evento económico"),
             "Fecha y hora": fecha_dt,
-            "Previo": item.get("previous") if item.get("previous") is not None else "—",
-            "Previsión": item.get("estimate") if item.get("estimate") is not None else "—",
-            "Actual": item.get("actual") if item.get("actual") is not None else "—",
-            "Impacto": IMPACT_ES.get(item.get("impact"), "Bajo"),
+            "Previo": item.get("Previous") if item.get("Previous") not in (None, "") else "—",
+            "Previsión": item.get("Forecast") if item.get("Forecast") not in (None, "") else "—",
+            "Actual": item.get("Actual") if item.get("Actual") not in (None, "") else "—",
+            "Impacto": IMPORTANCE_ES.get(item.get("Importance"), "Bajo"),
         })
 
     return pd.DataFrame(filas)
@@ -95,17 +98,17 @@ def panel_noticias():
     try:
         with st.spinner("Actualizando calendario económico..."):
             datos = obtener_calendario()
-    except requests.RequestException as e:
-        st.error(f"No se pudo conectar con Financial Modeling Prep: {e}", icon=":material/error:")
-        return
-
-    if datos is None:
+    except requests.HTTPError as e:
+        codigo = e.response.status_code if e.response is not None else "?"
         st.error(
-            "Falta configurar la API key de Financial Modeling Prep. Agrega `FMP_API_KEY` en "
-            "`.streamlit/secrets.toml` (local) o en Settings → Secrets de tu app en Streamlit "
-            "Cloud.",
-            icon=":material/key_off:",
+            f"Trading Economics respondió con error {codigo}. Si usas la cuenta 'guest' gratuita, "
+            "puede estar limitada — considera registrar una cuenta real en tradingeconomics.com/api "
+            "y agregar `TE_API_KEY` en Secrets.",
+            icon=":material/error:",
         )
+        return
+    except requests.RequestException as e:
+        st.error(f"No se pudo conectar con Trading Economics: {e}", icon=":material/error:")
         return
 
     if datos.empty:
@@ -160,7 +163,7 @@ def panel_noticias():
             hide_index=True,
         )
 
-    st.caption("Fuente: Financial Modeling Prep (calendario económico).")
+    st.caption("Fuente: Trading Economics (calendario económico).")
 
 
 st.title(":material/monitoring: Robot analizador de noticias económicas")
